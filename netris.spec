@@ -5,8 +5,6 @@ Version:	0.5
 Release:	1
 License:	GPL
 Group:		Applications/Games
-Group(de):	Applikationen/Spiele
-Group(pl):	Aplikacje/Gry
 Source0:	ftp://ftp.netris.org/pub/netris/%{name}-%{version}.tar.gz
 Patch0:		%{name}-make.patch
 URL:		http://www.netris.org/
