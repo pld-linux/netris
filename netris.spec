@@ -3,21 +3,21 @@ Summary(pl):	Darmowa, sieciowa wersja T*trisa
 Name:		netris
 Version:	0.5
 Release:	1
-URL:		http://www.netris.org/
 License:	GPL
 Group:		Applications/Games
 Group(de):	Applikationen/Spiele
 Group(pl):	Aplikacje/Gry
 Source0:	ftp://ftp.netris.org/pub/netris/%{name}-%{version}.tar.gz
 Patch0:		%{name}-make.patch
+URL:		http://www.netris.org/
 BuildRequires:	ncurses-devel
 BuildRoot:	%{tmpdir}/%{name}-%{version}-root-%(id -u -n)
 
 %description
-A free networked version of T*tris
+A free networked version of T*tris.
 
 %description -l pl
-Darmowa, sieciowa wersja T*trisa
+Darmowa, sieciowa wersja T*trisa.
 
 %prep
 %setup -q
@@ -43,5 +43,5 @@ rm -rf $RPM_BUILD_ROOT
 
 %files
 %defattr(644,root,root,755)
-%attr(755,root,root) %{_bindir}/*
 %doc *.gz
+%attr(755,root,root) %{_bindir}/*
