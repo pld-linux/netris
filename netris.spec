@@ -25,7 +25,7 @@ Darmowa, sieciowa wersja T*trisa.
 
 %build
 ./Configure \
-	--copt "%{?debug:-O0 -g}%{!?debug:$RPM_OPT_FLAGS}"
+	--copt "%{rpmcflags}"
 %{__make}
 
 
