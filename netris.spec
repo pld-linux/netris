@@ -34,12 +34,10 @@ install -d $RPM_BUILD_ROOT%{_bindir}
 install netris	$RPM_BUILD_ROOT%{_bindir}
 install sr	$RPM_BUILD_ROOT%{_bindir}
 
-gzip -9nf README FAQ *_desc
-
 %clean
 rm -rf $RPM_BUILD_ROOT
 
 %files
 %defattr(644,root,root,755)
-%doc *.gz
+%doc README FAQ *_desc
 %attr(755,root,root) %{_bindir}/*
