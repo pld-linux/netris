@@ -27,13 +27,11 @@ Darmowa, sieciowa wersja T*trisa.
 	--copt "%{rpmcflags}"
 %{__make}
 
-
 %install
 rm -rf $RPM_BUILD_ROOT
 install -d $RPM_BUILD_ROOT%{_bindir}
 
-install netris	$RPM_BUILD_ROOT%{_bindir}
-install sr	$RPM_BUILD_ROOT%{_bindir}
+install {netris,sr} $RPM_BUILD_ROOT%{_bindir}
 
 %clean
 rm -rf $RPM_BUILD_ROOT
