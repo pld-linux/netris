@@ -6,6 +6,7 @@ Release:	1
 License:	GPL
 Group:		Applications/Games
 Source0:	ftp://ftp.netris.org/pub/netris/%{name}-%{version}.tar.gz
+# Source0-md5:	a30c950fd4e4779a26f856bc7cd1aaff
 Patch0:		%{name}-make.patch
 URL:		http://www.netris.org/
 BuildRequires:	ncurses-devel
