@@ -1,0 +1,953 @@
+--- netris-0.52.orig/robot.c
++++ netris-0.52/robot.c
+@@ -35,7 +35,7 @@
+ 		{ NULL, 0, FT_read, -1, RobotGenFunc, EM_robot };
+ 
+ static int robotProcess;
+-static FILE *toRobot;
++static FILE *toRobot = NULL;
+ static int toRobotFd, fromRobotFd;
+ 
+ static char robotBuf[128];
+@@ -112,10 +112,13 @@
+ ExtFunc void CloseRobot(void)
+ {
+ 	RemoveEventGen(&robotGen);
+-	if (robotProcess > 0)
+-		RobotCmd(1, "Exit\n");
+-	fclose(toRobot);
+-	close(fromRobotFd);
++	if(toRobot) {
++		if (robotProcess > 0)
++			RobotCmd(1, "Exit\n");
++		fclose(toRobot);
++		close(fromRobotFd);
++		toRobot = NULL;
++	}
+ }
+ 
+ static MyEventType RobotGenFunc(EventGenRec *gen, MyEvent *event)
+--- netris-0.52.orig/curses.c
++++ netris-0.52/curses.c
+@@ -57,6 +58,7 @@
+ static int boardYPos[MAX_SCREENS], boardXPos[MAX_SCREENS];
+ static int statusYPos, statusXPos;
+ static int haveColor;
++static int screens_dirty = 0;
+ 
+ static char *term_vi;	/* String to make cursor invisible */
+ static char *term_ve;	/* String to make cursor visible */
+@@ -98,6 +100,7 @@
+ #endif
+ 
+ 	AtExit(CleanupScreens);
++	screens_dirty = 1;
+ 	RestoreSignals(NULL, &oldMask);
+ 
+ 	cbreak();
+@@ -116,9 +119,12 @@
+ 
+ ExtFunc void CleanupScreens(void)
+ {
+-	RemoveEventGen(&keyGen);
+-	endwin();
+-	OutputTermStr(term_ve, 1);
++	if (screens_dirty) {
++		RemoveEventGen(&keyGen);
++		endwin();
++		OutputTermStr(term_ve, 1);
++		screens_dirty = 0;
++	}
+ }
+ 
+ ExtFunc void GetTermcapInfo(void)
+@@ -201,6 +207,8 @@
+ 	for (y = boardVisible[scr] - 1; y >= 0; --y) {
+ 		move(boardYPos[scr] - y, boardXPos[scr] - 1);
+ 		addch('|');
++		for (x = boardWidth[scr] - 1; x >= 0; --x)
++			addstr("  ");
+ 		move(boardYPos[scr] - y, boardXPos[scr] + 2 * boardWidth[scr]);
+ 		addch('|');
+ 	}
+@@ -256,6 +264,23 @@
+ 
+ ExtFunc void ShowDisplayInfo(void)
+ {
++	move(statusYPos - 3, statusXPos);
++	printw("Won:  %3d", won);
++	move(statusYPos - 2, statusXPos);
++	printw("Lost: %3d", lost);
++
++	move(statusYPos - 1, statusXPos);
++	switch(gameState) {
++	case STATE_WAIT_CONNECTION:
++		addstr("Waiting for opponent...      ");
++		break;
++	case STATE_WAIT_KEYPRESS:
++		addstr("Press the key for a new game.");
++		break;
++	default:
++		addstr("                             ");
++	}
++
+ 	move(statusYPos - 9, statusXPos);
+ 	printw("Seed: %d", initSeed);
+ 	clrtoeol();
+--- netris-0.52.orig/game.c
++++ netris-0.52/game.c
+@@ -28,11 +28,11 @@
+ #include <netinet/in.h>
+ 
+ enum { KT_left, KT_rotate, KT_right, KT_drop, KT_down,
+-	KT_toggleSpy, KT_pause, KT_faster, KT_redraw, KT_numKeys };
++	KT_toggleSpy, KT_pause, KT_faster, KT_redraw, KT_new, KT_numKeys };
+ 
+ static char *keyNames[KT_numKeys+1] = {
+ 	"Left", "Rotate", "Right", "Drop", "Down", "ToggleSpy", "Pause",
+-	"Faster", "Redraw", NULL };
++	"Faster", "Redraw", "New", NULL };
+ 
+ static char *gameNames[GT_len] = { "OnePlayer", "ClassicTwo" };
+ 
+@@ -40,6 +40,10 @@
+ static int dropModeEnable = 0;
+ static char *robotProg;
+ 
++static int wonLast = 0;
++int lost = 0, won = 0;
++enum States gameState = STATE_STARTING;
++
+ ExtFunc void MapKeys(char *newKeys)
+ {
+ 	int i, k, ch;
+@@ -323,6 +327,7 @@
+ 					break;
+ 				case E_lostRobot:
+ 				case E_lostConn:
++					wonLast = 1;
+ 					goto gameOver;
+ 				default:
+ 					break;
+@@ -350,14 +355,17 @@
+ 			SendPacket(NP_giveJunk, sizeof(data), data);
+ 		}
+ 	}
++	wonLast = 0;
++
+ gameOver:
+ 	SetITimer(0, 0);
+ }
+ 
+ ExtFunc int main(int argc, char **argv)
+ {
+-	int initConn = 0, waitConn = 0, ch;
++	int initConn = 0, waitConn = 0, ch, done = 0;
+ 	char *hostStr = NULL, *portStr = NULL;
++	MyEvent event;
+ 
+ 	standoutEnable = colorEnable = 1;
+ 	stepDownInterval = DEFAULT_INTERVAL;
+@@ -422,112 +430,139 @@
+ 	if (fairRobot && !robotEnable)
+ 		fatal("You can't use the -F option without the -r option");
+ 	InitUtil();
+-	if (robotEnable)
+-		InitRobot(robotProg);
+-	InitNet();
+-	InitScreens();
+-	if (initConn || waitConn) {
+-		MyEvent event;
+-
+-		game = GT_classicTwo;
+-		if (initConn)
+-			InitiateConnection(hostStr, portStr);
+-		else if (waitConn)
+-			WaitForConnection(portStr);
+-		{
+-			netint4 data[2];
+-			int major;
+-
+-			data[0] = hton4(MAJOR_VERSION);
+-			data[1] = hton4(PROTOCOL_VERSION);
+-			SendPacket(NP_version, sizeof(data), data);
+-			if (WaitMyEvent(&event, EM_net) != E_net)
+-				fatal("Network negotiation failed");
+-			memcpy(data, event.u.net.data, sizeof(data));
+-			major = ntoh4(data[0]);
+-			protocolVersion = ntoh4(data[1]);
+-			if (event.u.net.type != NP_version || major < MAJOR_VERSION)
+-				fatal("Your opponent is using an old, incompatible version\n"
+-					"of Netris.  They should get the latest version.");
+-			if (major > MAJOR_VERSION)
+-				fatal("Your opponent is using an newer, incompatible version\n"
+-					"of Netris.  Get the latest version.");
+-			if (protocolVersion > PROTOCOL_VERSION)
+-				protocolVersion = PROTOCOL_VERSION;
+-		}
+-		if (protocolVersion < 3 && stepDownInterval != DEFAULT_INTERVAL)
+-			fatal("Your opponent's version of Netris predates the -i option.\n"
+-					"For fairness, you shouldn't use the -i option either.");
+-		{
+-			netint4 data[3];
+-			int len;
+-			int seed;
+-
+-			if (protocolVersion >= 3)
+-				len = sizeof(data);
+-			else
+-				len = sizeof(netint4[2]);
+-			if ((myFlags & SCF_setSeed))
+-				seed = initSeed;
+-			else
+-				seed = time(0);
+-			if (waitConn)
+-				SRandom(seed);
+-			data[0] = hton4(myFlags);
+-			data[1] = hton4(seed);
+-			data[2] = hton4(stepDownInterval);
+-			SendPacket(NP_startConn, len, data);
+-			if (WaitMyEvent(&event, EM_net) != E_net ||
+-					event.u.net.type != NP_startConn)
+-				fatal("Network negotiation failed");
+-			memcpy(data, event.u.net.data, len);
+-			opponentFlags = ntoh4(data[0]);
+-			seed = ntoh4(data[1]);
+-			if (initConn) {
+-				if ((opponentFlags & SCF_setSeed) != (myFlags & SCF_setSeed))
+-					fatal("If one player sets the random number seed, "
+-							"both must.");
+-				if ((myFlags & SCF_setSeed) && seed != initSeed)
+-					fatal("Both players have set the random number seed, "
+-							"and they are unequal.");
+-				if (protocolVersion >= 3 && stepDownInterval != ntoh4(data[2]))
+-					fatal("Your opponent is using a different step-down "
+-						"interval (-i).\nYou must both use the same one.");
+-				SRandom(seed);
++	InitScreens();	
++	while(!done) {
++		if (robotEnable)
++			InitRobot(robotProg);
++		InitNet();
++		if (!initSeed)
++			SRandom(time(0));
++		if (initConn || waitConn) {
++			game = GT_classicTwo;
++			if(gameState != STATE_STARTING) {
++				gameState = STATE_WAIT_CONNECTION;
++				ShowDisplayInfo();
++				RefreshScreen();
++			}
++			if (initConn)
++				InitiateConnection(hostStr, portStr);
++			else if (waitConn)
++				WaitForConnection(portStr);
++			gameState = STATE_PLAYING;
++			ShowDisplayInfo();
++			RefreshScreen();
++			{
++				netint4 data[2];
++				int major;
++				
++				data[0] = hton4(MAJOR_VERSION);
++				data[1] = hton4(PROTOCOL_VERSION);
++				SendPacket(NP_version, sizeof(data), data);
++				if (WaitMyEvent(&event, EM_net) != E_net)
++					fatal("Network negotiation failed");
++				memcpy(data, event.u.net.data, sizeof(data));
++				major = ntoh4(data[0]);
++				protocolVersion = ntoh4(data[1]);
++				if (event.u.net.type != NP_version || major < MAJOR_VERSION)
++					fatal("Your opponent is using an old, incompatible version\n"
++					      "of Netris.  They should get the latest version.");
++				if (major > MAJOR_VERSION)
++					fatal("Your opponent is using an newer, incompatible version\n"
++					      "of Netris.  Get the latest version.");
++				if (protocolVersion > PROTOCOL_VERSION)
++					protocolVersion = PROTOCOL_VERSION;
+ 			}
++			if (protocolVersion < 3 && stepDownInterval != DEFAULT_INTERVAL)
++				fatal("Your opponent's version of Netris predates the -i option.\n"
++				      "For fairness, you shouldn't use the -i option either.");
++			{
++				netint4 data[3];
++				int len;
++				int seed;
++				
++				if (protocolVersion >= 3)
++					len = sizeof(data);
++				else
++					len = sizeof(netint4[2]);
++				if ((myFlags & SCF_setSeed))
++					seed = initSeed;
++				else
++					seed = time(0);
++				if (waitConn)
++					SRandom(seed);
++				data[0] = hton4(myFlags);
++				data[1] = hton4(seed);
++				data[2] = hton4(stepDownInterval);
++				SendPacket(NP_startConn, len, data);
++				if (WaitMyEvent(&event, EM_net) != E_net ||
++				    event.u.net.type != NP_startConn)
++					fatal("Network negotiation failed");
++				memcpy(data, event.u.net.data, len);
++				opponentFlags = ntoh4(data[0]);
++				seed = ntoh4(data[1]);
++				if (initConn) {
++					if ((opponentFlags & SCF_setSeed) != (myFlags & SCF_setSeed))
++						fatal("If one player sets the random number seed, "
++						      "both must.");
++					if ((myFlags & SCF_setSeed) && seed != initSeed)
++						fatal("Both players have set the random number seed, "
++						      "and they are unequal.");
++					if (protocolVersion >= 3 && stepDownInterval != ntoh4(data[2]))
++						fatal("Your opponent is using a different step-down "
++						      "interval (-i).\nYou must both use the same one.");
++					SRandom(seed);
++				}
++			}
++			{
++				char *userName;
++				int len, i;
++
++				userName = getenv("LOGNAME");
++				if (!userName || !userName[0])
++					userName = getenv("USER");
++				if (!userName || !userName[0])
++					strcpy(userName, "???");
++				len = strlen(userName)+1;
++				if (len > sizeof(opponentName))
++					len = sizeof(opponentName);
++				SendPacket(NP_userName, len, userName);
++				if (WaitMyEvent(&event, EM_net) != E_net ||
++				    event.u.net.type != NP_userName)
++					fatal("Network negotiation failed");
++				strncpy(opponentName, event.u.net.data,
++					sizeof(opponentName)-1);
++				opponentName[sizeof(opponentName)-1] = 0;
++				for (i = 0; opponentName[i]; ++i)
++					if (!isprint(opponentName[i]))
++						opponentName[i] = '?';
++				for (i = 0; opponentHost[i]; ++i)
++					if (!isprint(opponentHost[i]))
++						opponentHost[i] = '?';
++			}
++			OneGame(0, 1);
+ 		}
+-		{
+-			char *userName;
+-			int len, i;
+-
+-			userName = getenv("LOGNAME");
+-			if (!userName || !userName[0])
+-				userName = getenv("USER");
+-			if (!userName || !userName[0])
+-				strcpy(userName, "???");
+-			len = strlen(userName)+1;
+-			if (len > sizeof(opponentName))
+-				len = sizeof(opponentName);
+-			SendPacket(NP_userName, len, userName);
+-			if (WaitMyEvent(&event, EM_net) != E_net ||
+-					event.u.net.type != NP_userName)
+-				fatal("Network negotiation failed");
+-			strncpy(opponentName, event.u.net.data,
+-				sizeof(opponentName)-1);
+-			opponentName[sizeof(opponentName)-1] = 0;
+-			for (i = 0; opponentName[i]; ++i)
+-				if (!isprint(opponentName[i]))
+-					opponentName[i] = '?';
+-			for (i = 0; opponentHost[i]; ++i)
+-				if (!isprint(opponentHost[i]))
+-					opponentHost[i] = '?';
++		else {
++			game = GT_onePlayer;
++			OneGame(0, -1);
++		}
++		if (wonLast) {
++			won++;
++		} else {
++			lost++;
++			WaitMyEvent(&event, EM_net);
++		}
++		CloseNet();
++		if (robotEnable) {
++			CloseRobot();
++		} else {
++			gameState = STATE_WAIT_KEYPRESS;
++			ShowDisplayInfo();
++			RefreshScreen();
++			while(getchar() != keyTable[KT_new])
++				;
+ 		}
+-		OneGame(0, 1);
+-	}
+-	else {
+-		game = GT_onePlayer;
+-		OneGame(0, -1);
+ 	}
++
+ 	return 0;
+ }
+ 
+--- netris-0.52.orig/inet.c
++++ netris-0.52/inet.c
+@@ -42,6 +42,8 @@
+ 
+ ExtFunc void InitNet(void)
+ {
++	lostConn = 0;
++	gotEndConn = 0;
+ 	AtExit(CloseNet);
+ }
+ 
+--- netris-0.52.orig/netris.h
++++ netris-0.52/netris.h
+@@ -65,7 +65,7 @@
+ 
+ #define DEFAULT_PORT 9284	/* Very arbitrary */
+ 
+-#define DEFAULT_KEYS "jkl mspf^l"
++#define DEFAULT_KEYS "jkl mspf^ln"
+ 
+ /* Protocol versions */
+ #define MAJOR_VERSION		1	
+@@ -152,6 +152,13 @@
+ typedef int (*ShapeDrawFunc)(int scr, int y, int x,
+ 					BlockType type, void *data);
+ 
++enum States {
++	STATE_STARTING,
++	STATE_PLAYING,
++	STATE_WAIT_CONNECTION,
++	STATE_WAIT_KEYPRESS
++};
++
+ EXT GameType game;
+ EXT int boardHeight[MAX_SCREENS];
+ EXT int boardVisible[MAX_SCREENS], boardWidth[MAX_SCREENS];
+@@ -167,6 +174,9 @@
+ 
+ EXT int myFlags, opponentFlags;
+ 
++EXT int won, lost;
++EXT enum States gameState;
++
+ EXT char scratch[1024];
+ 
+ extern ShapeOption stdOptions[];
+--- netris-0.52.orig/util.c
++++ netris-0.52/util.c
+@@ -74,7 +74,7 @@
+ 	  "  -p <port>	Set port number (default is %d)\n"
+ 	  "  -k <keys>	Remap keys.  The argument is a prefix of the string\n"
+ 	  "		  containing the keys in order: left, rotate, right, drop,\n"
+-	  "		  down-faster, toggle-spying, pause, faster, redraw.\n"
++	  "		  down-faster, toggle-spying, pause, faster, redraw, new.\n"
+ 	  "		  \"^\" prefixes controls.  (default is \"%s\")\n"
+ 	  "  -i <sec>	Set the step-down interval, in seconds\n"
+ 	  "  -r <robot>	Execute <robot> (a command) as a robot controlling\n"
+@@ -267,6 +267,7 @@
+ 
+ ExtFunc volatile void fatal(char *msg)
+ {
++	CleanupScreens ();
+ 	fprintf(stderr, "%s\n", msg);
+ 	exit(1);
+ }
+--- netris-0.52.orig/board.c
++++ netris-0.52/board.c
+@@ -36,6 +36,19 @@
+ 
+ ExtFunc void InitBoard(int scr)
+ {
++	int s,w,h;
++
++	for(s = 0 ; s < MAX_SCREENS ; s++)
++		for(h = 0 ; h < MAX_BOARD_HEIGHT ; h++)
++			for(w = 0 ; w < MAX_BOARD_WIDTH ; w++) {
++				board[s][h][w] = 0;
++				oldBoard[s][h][w] = 0;
++				changed[s][h] = 0;
++				falling[s][w] = 0;
++				oldFalling[s][w] = 0;
++			}
++				
++
+ 	boardHeight[scr] = MAX_BOARD_HEIGHT;
+ 	boardVisible[scr] = 20;
+ 	boardWidth[scr] = 10;
+--- netris-0.52.orig/debian/watch
++++ netris-0.52/debian/watch
+@@ -0,0 +1,3 @@
++version=2
++# Site/Directory/Pattern                                   Version  Script
++ftp://ftp.netris.org/pub/netris/netris-([\d\.]+)\.tar\.gz  debian  uupdate
+--- netris-0.52.orig/debian/changelog
++++ netris-0.52/debian/changelog
+@@ -0,0 +1,123 @@
++netris (0.52-5) unstable; urgency=low
++
++  * Erm, add small fix for 64bit machines from #325926 which was meant to be
++    in the former upload already....  (closes: #325926)
++
++ -- Gerfried Fuchs <alfie@debian.org>  Mon, 05 Sep 2005 15:08:18 +0200
++
++netris (0.52-4) unstable; urgency=low
++
++  * Bumped standards version, no changes needed.
++  * Moved menu file from /usr/lib/menu to /usr/share/menu.
++
++ -- Gerfried Fuchs <alfie@debian.org>  Mon, 05 Sep 2005 14:22:50 +0200
++
++netris (0.52-3) unstable; urgency=low
++
++  * Quote all entries in the menu file.
++  * Fix -s setting, patch from Piotr Krukowiecki, thanks (closes: #300125)
++  * Fixed short description to not include an upercased article at the start.
++  * Slightly reformated copyright file a bit.
++
++ -- Gerfried Fuchs <alfie@debian.org>  Fri, 18 Mar 2005 18:04:22 +0100
++
++netris (0.52-2) unstable; urgency=low
++
++  * Applied patch from Per von Zweigbergk for staircase effect (closes: #83039)
++  * Bumped to policy 3.6.1: No changes needed.
++
++ -- Gerfried Fuchs <alfie@debian.org>  Thu, 25 Nov 2004 14:24:01 +0100
++
++netris (0.52-1) unstable; urgency=high
++
++  * New upstream release which fixes buffer overflow vulnerability
++    CAN-2003-0685 (closes: #205113) -- no other changes.
++  * Updated to policy 3.6.0: No changes needed.
++
++ -- Gerfried Fuchs <alfie@debian.org>  Mon, 18 Aug 2003 21:25:09 +0200
++
++netris (0.5-7) unstable; urgency=low
++
++  * Added 'n'ew game key to -k handling option (updated manual page wrt/
++    this).  Don't know though how to make the correct key show up in the
++    message so simply changed it.
++
++ -- Gerfried Fuchs <alfie@debian.org>  Fri, 18 Oct 2002 19:35:13 +0200
++
++netris (0.5-6) unstable; urgency=low
++
++  * Applied multi game patch with scoring from Tomas Berndtsson, received via
++    private mail.
++  * Removed /usr/doc -> /usr/share/doc handling.
++  * Removed some superfluous commas from the long description.
++
++ -- Gerfried Fuchs <alfie@debian.org>  Thu, 26 Sep 2002 22:47:20 +0200
++
++netris (0.5-5) unstable; urgency=low
++
++  * Updated watchfile to uscan version=2.
++  * Updated to policy 3.5.7: Added support for DEB_BUILD_OPTIONS too.
++  * Remove Makefile, .depend and config.h in clean target, too.
++
++ -- Gerfried Fuchs <alfie@debian.org>  Mon, 09 Sep 2002 18:19:59 +0200
++
++netris (0.5-4) unstable; urgency=medium
++
++  * wrote man page for netris-sample-robot, finally (closes: #19373)
++  * un-debhelper-ized the package.
++  * urgency=medium for having the libncurses4 removed from woody (previous
++    upload forgot to set urgency)
++
++ -- Gerfried Fuchs <alfie@debian.org>  Mon, 18 Feb 2002 12:59:56 +0100
++
++netris (0.5-3) unstable; urgency=low
++
++  * New Maintainer.
++  * Rebuild against libncurses5 (closes: #93943)
++  * Added manual page (thanks to Edward Betts for writing it) -- this doesn't
++    close 19373 though, netris-sample-robot still has no manual page.
++  * Removed emacs-junk from the end of this file.
++  * Updated to standards version 3.5.6:
++    * Fixed the pointer to the GPL in the copyright file.
++    * Added Build-Depends: debhelper, libncurses5-dev to control file.
++    * Binaries are stripped (closes: #127381)
++  * Added watch file.
++
++ -- Gerfried Fuchs <alfie@debian.org>  Mon, 11 Feb 2002 18:43:49 +0100
++
++netris (0.5-2) unstable; urgency=low
++
++  * Change maintainer address
++  * FHS compliant
++  * Standards: 3.0.1
++
++ -- Gergely Madarasz <gorgo@sztaki.hu>  Tue,  7 Sep 1999 21:17:37 +0200
++
++netris (0.5-1) unstable; urgency=low
++
++  * Compile with libncurses4
++  * Update menu file and standards version
++  * New upstream version
++
++ -- Gergely Madarasz <gorgo@caesar.elte.hu>  Thu,  3 Jun 1999 15:19:38 +0200
++
++netris (0.4-3) unstable; urgency=low
++
++  * Fix spelling mistake in extended description (Closes: #18922)
++  * Fix most lintian errors and warnings
++  * Switch to debhelper
++
++ -- Gergely Madarasz <gorgo@caesar.elte.hu>  Tue, 10 Mar 1998 22:32:59 +0100
++
++netris (0.4-2) unstable; urgency=low
++
++  * move sr.c.gz to /usr/doc/netris/examples (#16920)
++
++ -- Gergely Madarasz <gorgo@caesar.elte.hu>  Sun, 11 Jan 1998 00:55:16 +0100
++
++netris (0.4-1) unstable; urgency=low
++
++  * Changed Configure to use ncurses
++  * Initial Release.
++
++ -- Gergely Madarasz <gorgo@caesar.elte.hu>  Wed,  6 Aug 1997 22:10:42 +0200
+--- netris-0.52.orig/debian/menu
++++ netris-0.52/debian/menu
+@@ -0,0 +1,2 @@
++?package(netris):needs="text" section="Games/Tetris-like" title="Netris" \
++  command="/usr/games/netris" longtitle="Networked Tetris"
+--- netris-0.52.orig/debian/control
++++ netris-0.52/debian/control
+@@ -0,0 +1,25 @@
++Source: netris
++Section: games
++Priority: optional
++Maintainer: Gerfried Fuchs <alfie@debian.org>
++Build-Depends: libncurses5-dev
++Standards-Version: 3.6.2
++
++Package: netris
++Architecture: any
++Depends: ${shlibs:Depends}
++Description: free, networked version of T*tris
++ Netris is a free, networked variant of Tetris.
++ .
++ One-player mode is a tad boring at the moment because it never
++ gets any faster and there's no scoring.  This will be rectified
++ at some point.
++ .
++ Two players can play against each other. If you fill two or three 
++ lines with one piece your opponent gets respectively one or two 
++ unfilled lines at the bottom of his screen. If you fill even four lines
++ with one piece your opponent will get four unfilled lines.
++ .
++ This version at least partially supports robots. You can find the
++ protocol description in the documentation and a sample robot in
++ the examples.
+--- netris-0.52.orig/debian/netris.6
++++ netris-0.52/debian/netris.6
+@@ -0,0 +1,93 @@
++.TH netris 6 "3 Aug 2001" "0.5" "Netris"
++.SH NAME
++netris \- networked version of tetris
++.SH SYNOPSIS
++.B netris
++.RB [\| \-wFDSCHR \|]
++.RB [\| \-c
++.IR host \|]
++.RB [\| \-p
++.IR port \|]
++.RB [\| \-k
++.IR keys \|]
++.RB [\| \-i
++.IR sec \|]
++.RB [\| \-r
++.IR robot \|]
++.RB [\| \-s
++.IR seed \|]
++.SH DESCRIPTION
++The object of the game Tetris is to fit the shapes together forming complete
++rows, which then vanish.  When the shapes fill up to the top, the game ends.
++This version of Tetris can be played against other people over a network.
++.SH OPTIONS
++.TP
++.B \-w
++Wait for connection from another host running netris.
++.TP
++.B \-c\  host
++Initiate connection to waiting netris running on
++.IR host .
++.TP
++.B \-p\  port
++Set the port number to use for connecting to netris, the default port is 9284.
++.TP
++.B \-k\  keys
++Remap keys, the argument is a prefix of the string containing the keys in
++order: left, rotate, right, drop, down-faster, toggle-spying, pause, faster,
++redraw and new game. Use the "^" character to prefixes controls.  The default
++is to use "jkl mspf^ln".
++.TP
++.B \-i\  sec
++Set the step-down interval, in seconds.
++.TP
++.B \-r\  robot
++Execute 
++.I robot
++(a command) as a robot controlling the game instead of the keyboard.
++.TP
++.B \-F
++Use fair robot interface.
++.TP
++.B \-s\  seed
++Start with given random seed.
++.TP
++.B \-D
++Drops go into drop mode, this means that sliding off a cliff after a drop
++causes
++another drop automatically.
++.TP
++.B \-S
++Disable inverse/bold/color for slow terminals.
++.TP
++.B \-C
++Disable color.
++.TP
++.B \-H
++Show distribution and warranty information.
++.TP
++.B \-R
++Show the rules of the game.
++.SH RULES
++.SS Two player mode
++It's just like normal Tetris except that when you clear more than one row with
++a single piece, the other player's board is moved up and junk rows are added
++to the bottom.  If you clear 2, 3 or 4 rows, 1, 2 or 4 junk rows are added to
++your opponent's board, respectively.  The junk rows have exactly one empty
++column.  For each group of junk rows given, the empty columns will line up.
++This is intentional.
++
++The longest surviving player wins the game.
++
++.SS One player mode
++This mode is currently very boring, because there's no scoring and it never
++gets any faster.  This will be rectified at some point.  I'm not very
++motivated to do it right now because I'm sick of one player Tetris.  For now,
++use the "f" key (by default) to make the game go faster.  Speed-ups cannot be
++reversed for the remainder of the game.
++
++.SH AUTHORS
++Netris was written by Mark H. Weaver <mhw@netris.org>.
++
++This manual page was written by Edward Betts <edward@debian.org>, for
++the Debian GNU/Linux system (but may be used by others).
+--- netris-0.52.orig/debian/copyright
++++ netris-0.52/debian/copyright
+@@ -0,0 +1,24 @@
++This package was first debianized by Gergely Madarasz <gorgo@caesar.elte.hu> on
++Wed,  6 Aug 1997 22:10:42 +0200.
++
++It was downloaded from ftp://ftp.netris.org/pub/netris/
++
++    Copyright (C) 1994,1995,1996  Mark H. Weaver <mhw@netris.org>
++    
++    This program is free software; you can redistribute it and/or modify it
++    under the terms of the GNU General Public License as published by the
++    Free Software Foundation; either version 2, or (at your option) any
++    later version.
++    
++    This program is distributed in the hope that it will be useful,
++    but WITHOUT ANY WARRANTY; without even the implied warranty of
++    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++    GNU General Public License for more details.
++    
++    You should have received a copy of the GNU General Public License
++    along with this program; if not, write to the Free Software
++    Foundation, 59 Temple Place - Suite 330,
++    Boston, MA 02111-1307, USA.
++
++On Debian GNU/Linux systems, the complete text of the GNU General
++Public License can be found in `/usr/share/common-licenses/GPL'.
+--- netris-0.52.orig/debian/README.Debian
++++ netris-0.52/debian/README.Debian
+@@ -0,0 +1,18 @@
++netris for Debian
++-----------------
++
++ I did apply the "new game" patch from Tomas Berndtsson <tomas@nocrew.org>.
++This patch is really nice because in multiplayer games, you don't have to exit
++and can press 'n' (or whatever key you bound the function to) to start a new
++game.  For the keybinding stuff I had to patch the patch myself ,-)
++
++ I have contacted the upstream maintainer about this patch in June but haven't
++heard from him since then.  Last contact I had with Mark was in March.  If you
++have any information about him feel free to contact me.
++
++ Ah, and I have another patch sent in by Rob Hensley <zoid@staticky.com>
++pending but haven't found the time to examine it closer. It adds a line counter
++in single player game mode according to Rob but there is more in it.  Some code
++cleanup and so....
++
++ -- Gerfried Fuchs <alfie@debian.org>  Fri, 18 Oct 2002 19:35:13 +0200
+--- netris-0.52.orig/debian/rules
++++ netris-0.52/debian/rules
+@@ -0,0 +1,95 @@
++#!/usr/bin/make -f
++# rules file for netris
++
++COPT = -g
++INSTALL = install
++INSTALL_FILE    = $(INSTALL) -p    -oroot -groot -m644
++INSTALL_PROGRAM = $(INSTALL) -p    -oroot -groot -m755
++INSTALL_SCRIPT  = $(INSTALL) -p    -oroot -groot -m755
++INSTALL_DIR     = $(INSTALL) -p -d -oroot -groot -m755
++
++ifneq (,$(findstring noopt,$(DEB_BUILD_OPTIONS)))
++	COPT += -O0
++else
++	COPT += -O2
++endif
++ifeq (,$(findstring nostrip,$(DEB_BUILD_OPTIONS)))
++	INSTALL_PROGRAM += -s
++endif
++
++
++clean:
++	$(checkdir)
++	$(checkroot)
++	-rm -rf debian/netris debian/substvars debian/files \
++		build-stamp install-stamp config.h .depend
++	-$(MAKE) clean
++	-rm -rf Makefile
++
++
++build: build-stamp
++build-stamp:
++	$(checkdir)
++	./Configure -g
++	$(MAKE) COPT="$(COPT)"
++	touch build-stamp
++
++
++install: install-stamp
++install-stamp: build
++	$(checkdir)
++	$(checkroot)
++	-rm -rf debian/netris
++	$(INSTALL_DIR) debian/netris
++	cd debian/netris && $(INSTALL_DIR) usr/games usr/share/man/man6 \
++		usr/share/doc/netris/examples
++	$(INSTALL_PROGRAM) netris debian/netris/usr/games
++	$(INSTALL_PROGRAM) sr     debian/netris/usr/games/netris-sample-robot
++	$(INSTALL_FILE) debian/netris*.6 debian/netris/usr/share/man/man6
++	$(INSTALL_FILE) FAQ robot_desc   debian/netris/usr/share/doc/netris
++	$(INSTALL_FILE) sr.c debian/netris/usr/share/doc/netris/examples
++	gzip -9 debian/netris/usr/share/man/man6/netris*.6 \
++		debian/netris/usr/share/doc/netris/FAQ \
++		debian/netris/usr/share/doc/netris/robot_desc \
++		debian/netris/usr/share/doc/netris/examples/sr.c
++	touch install-stamp
++
++
++# Build architecture-independent files here.
++binary-indep: build
++# We have nothing to do by default.
++
++
++# Build architecture-dependent files here.
++binary-arch: build install
++	$(checkdir)
++	$(checkroot)
++	$(INSTALL_DIR) debian/netris/DEBIAN debian/netris/usr/share/menu
++	$(INSTALL_FILE) debian/menu      debian/netris/usr/share/menu/netris
++	$(INSTALL_FILE) debian/copyright debian/README.Debian \
++		debian/netris/usr/share/doc/netris
++	$(INSTALL_FILE) debian/changelog \
++		debian/netris/usr/share/doc/netris/changelog.Debian
++	gzip -9 debian/netris/usr/share/doc/netris/changelog.Debian
++	$(INSTALL_SCRIPT) debian/postinst debian/postrm \
++		debian/netris/DEBIAN
++	dpkg-shlibdeps -Tdebian/substvars -dDepends \
++		debian/netris/usr/games/netris*
++	dpkg-gencontrol -ldebian/changelog -isp -Tdebian/substvars -pnetris \
++		-Pdebian/netris
++	cd debian/netris && find * -type f ! -regex '^DEBIAN/.*' -print0 | \
++		xargs -r0 md5sum > DEBIAN/md5sums
++	dpkg --build debian/netris ..
++
++
++binary: binary-indep binary-arch
++
++define checkdir
++	test -f debian/rules
++endef
++
++define checkroot
++	test root = "`whoami`"
++endef
++
++.PHONY: clean build install binary-indep binary-arch binary
+--- netris-0.52.orig/debian/postinst
++++ netris-0.52/debian/postinst
+@@ -0,0 +1,10 @@
++#!/bin/sh -e
++# postinst script for netris
++
++if [ "$1" != configure ]; then
++	exit 0
++fi
++
++if [ -x /usr/bin/update-menus ]; then
++	update-menus
++fi
+--- netris-0.52.orig/debian/netris-sample-robot.6
++++ netris-0.52/debian/netris-sample-robot.6
+@@ -0,0 +1,42 @@
++.TH netris-sample-robot 6 "16 Feb 2002" "0.5" "Netris Sample Robot"
++.SH "NAME"
++netris-sample-robot \- sample robot for netris
++.SH "SYNOPSIS"
++.B netris-sample-robot
++.RB [\| \-l \|]
++.SH "DESCRIPTION"
++The netris-sample-robot is a sample implementation of the robot protocol. It
++plays quite well but isn't too hard to beat. The robot should be started from
++netris with the option
++.B \-r
++to connect or wait for another player to join. You can also let two robots play
++against each other in that way, if you like.
++
++.SH "OPTIONS"
++.TP
++.B \-l
++Writes some log information into the file
++.B log
++in the current working directory. If it can't it bails out.
++
++.SH "EXAMPLES"
++.TP
++To start the netris-sample-robot waiting for another connection with logfile use the following line:
++netris -w -r 'netris-sample-robot -l'
++.P
++You then just have to start netris somewhere else which connects to that robot.
++
++.SH "SEE ALSO"
++.BR netris (6)
++
++.SH "BUGS"
++One known bug of the netris-sample-robot is that it hangs quite often. This was
++already filed as a bugreport against the package so please refrain from doing
++so again.  If you have an idea why this happens or know a solution how to fix
++it feel free to mail me.
++
++.SH "AUTHORS"
++Netris was written by Mark H. Weaver <mhw@netris.org>.
++
++This manual page was written by Gerfried Fuchs <alfie@debian.org> for
++the Debian GNU/Linux system (but may be used by others).
+--- netris-0.52.orig/debian/postrm
++++ netris-0.52/debian/postrm
+@@ -0,0 +1,6 @@
++#!/bin/sh -e
++# postrm script for netris
++
++if [ -x /usr/bin/update-menus ]; then
++	update-menus
++fi
