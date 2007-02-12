@@ -1,5 +1,5 @@
 Summary:	A free networked version of T*tris
-Summary(pl):	Darmowa, sieciowa wersja T*trisa
+Summary(pl.UTF-8):   Darmowa, sieciowa wersja T*trisa
 Name:		netris
 Version:	0.52
 Release:	4
@@ -16,7 +16,7 @@ BuildRoot:	%{tmpdir}/%{name}-%{version}-root-%(id -u -n)
 %description
 A free networked version of T*tris.
 
-%description -l pl
+%description -l pl.UTF-8
 Darmowa, sieciowa wersja T*trisa.
 
 %prep
