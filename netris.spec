@@ -2,7 +2,7 @@ Summary:	A free networked version of T*tris
 Summary(pl.UTF-8):	Darmowa, sieciowa wersja T*trisa
 Name:		netris
 Version:	0.52
-Release:	4
+Release:	5
 License:	GPL
 Group:		Applications/Games
 Source0:	ftp://ftp.netris.org/pub/netris/%{name}-%{version}.tar.gz
