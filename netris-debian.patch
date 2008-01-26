@@ -29,17 +29,6 @@
  static MyEventType RobotGenFunc(EventGenRec *gen, MyEvent *event)
 --- netris-0.52.orig/curses.c
 +++ netris-0.52/curses.c
-@@ -20,8 +20,10 @@
-  */
- 
- #include "netris.h"
-+#include <time.h>
- #include <sys/types.h>
- #include <unistd.h>
-+#include <term.h>
- #include <curses.h>
- #include <string.h>
- #include <stdlib.h>
 @@ -57,6 +59,7 @@
  static int boardYPos[MAX_SCREENS], boardXPos[MAX_SCREENS];
  static int statusYPos, statusXPos;
