@@ -29,7 +29,7 @@
  static MyEventType RobotGenFunc(EventGenRec *gen, MyEvent *event)
 --- netris-0.52.orig/curses.c
 +++ netris-0.52/curses.c
-@@ -57,6 +58,7 @@
+@@ -57,6 +59,7 @@
  static int boardYPos[MAX_SCREENS], boardXPos[MAX_SCREENS];
  static int statusYPos, statusXPos;
  static int haveColor;
@@ -37,7 +37,7 @@
  
  static char *term_vi;	/* String to make cursor invisible */
  static char *term_ve;	/* String to make cursor visible */
-@@ -98,6 +100,7 @@
+@@ -98,6 +101,7 @@
  #endif
  
  	AtExit(CleanupScreens);
@@ -45,7 +45,7 @@
  	RestoreSignals(NULL, &oldMask);
  
  	cbreak();
-@@ -116,9 +119,12 @@
+@@ -116,9 +120,12 @@
  
  ExtFunc void CleanupScreens(void)
  {
@@ -61,7 +61,7 @@
  }
  
  ExtFunc void GetTermcapInfo(void)
-@@ -201,6 +207,8 @@
+@@ -201,6 +208,8 @@
  	for (y = boardVisible[scr] - 1; y >= 0; --y) {
  		move(boardYPos[scr] - y, boardXPos[scr] - 1);
  		addch('|');
@@ -70,10 +70,16 @@
  		move(boardYPos[scr] - y, boardXPos[scr] + 2 * boardWidth[scr]);
  		addch('|');
  	}
-@@ -256,6 +264,23 @@
+@@ -256,6 +265,29 @@
  
  ExtFunc void ShowDisplayInfo(void)
  {
++	if (game == GT_classicTwo) {
++		move(statusYPos - 5, statusXPos);
++		printw("Enemy lines: %3d/%4d", enemyLinesCleared, enemyTotalLinesCleared);
++	}
++	move(statusYPos - 4, statusXPos);
++	printw("My lines:    %3d/%4d", myLinesCleared, myTotalLinesCleared);
 +	move(statusYPos - 3, statusXPos);
 +	printw("Won:  %3d", won);
 +	move(statusYPos - 2, statusXPos);
@@ -94,6 +100,24 @@
  	move(statusYPos - 9, statusXPos);
  	printw("Seed: %d", initSeed);
  	clrtoeol();
+@@ -263,7 +295,7 @@
+ 	printw("Speed: %dms", speed / 1000);
+ 	clrtoeol();
+ 	if (robotEnable) {
+-		move(statusYPos - 6, statusXPos);
++		move(statusYPos - 7, statusXPos);
+ 		if (fairRobot)
+ 			addstr("Controlled by a fair robot");
+ 		else
+@@ -271,7 +303,7 @@
+ 		clrtoeol();
+ 	}
+ 	if (opponentFlags & SCF_usingRobot) {
+-		move(statusYPos - 5, statusXPos);
++		move(statusYPos - 6, statusXPos);
+ 		if (opponentFlags & SCF_fairRobot)
+ 			addstr("The opponent is a fair robot");
+ 		else
 --- netris-0.52.orig/game.c
 +++ netris-0.52/game.c
 @@ -28,11 +28,11 @@
@@ -121,7 +145,32 @@
  ExtFunc void MapKeys(char *newKeys)
  {
  	int i, k, ch;
-@@ -323,6 +327,7 @@
+@@ -99,6 +103,7 @@
+ 	int key;
+ 	char *p, *cmd;
+ 
++	myLinesCleared = enemyLinesCleared = 0;
+ 	speed = stepDownInterval;
+ 	ResetBaseTime();
+ 	InitBoard(scr);
+@@ -293,7 +298,15 @@
+ 							DropPiece(scr2);
+ 							break;
+ 						case NP_clear:
+-							ClearFullLines(scr2);
++							{
++								int cleared = ClearFullLines(scr2);
++								if (cleared) {
++									enemyLinesCleared += cleared;
++									enemyTotalLinesCleared += cleared;
++									ShowDisplayInfo();
++									RefreshScreen();
++								}
++							}
+ 							break;
+ 						case NP_insertJunk:
+ 						{
+@@ -323,6 +336,7 @@
  					break;
  				case E_lostRobot:
  				case E_lostConn:
@@ -129,7 +178,21 @@
  					goto gameOver;
  				default:
  					break;
-@@ -350,14 +355,17 @@
+@@ -338,7 +352,12 @@
+ 	nextPiece:
+ 		dropMode = 0;
+ 		FreezePiece(scr);
+-		linesCleared = ClearFullLines(scr);
++		myLinesCleared += linesCleared = ClearFullLines(scr);		
++		myTotalLinesCleared += linesCleared;
++		if (linesCleared) {
++			ShowDisplayInfo();
++			RefreshScreen();
++		}
+ 		if (linesCleared > 0 && spied)
+ 			SendPacket(NP_clear, 0, NULL);
+ 		if (game == GT_classicTwo && linesCleared > 1) {
+@@ -350,14 +369,17 @@
  			SendPacket(NP_giveJunk, sizeof(data), data);
  		}
  	}
@@ -148,7 +211,7 @@
  
  	standoutEnable = colorEnable = 1;
  	stepDownInterval = DEFAULT_INTERVAL;
-@@ -422,112 +430,139 @@
+@@ -422,112 +444,139 @@
  	if (fairRobot && !robotEnable)
  		fatal("You can't use the -F option without the -r option");
  	InitUtil();
@@ -426,7 +489,7 @@
  EXT GameType game;
  EXT int boardHeight[MAX_SCREENS];
  EXT int boardVisible[MAX_SCREENS], boardWidth[MAX_SCREENS];
-@@ -167,6 +174,9 @@
+@@ -167,11 +174,19 @@
  
  EXT int myFlags, opponentFlags;
  
@@ -436,6 +499,16 @@
  EXT char scratch[1024];
  
  extern ShapeOption stdOptions[];
+ extern char *version_string;
+ 
++EXT int myLinesCleared;
++EXT int enemyLinesCleared;
++EXT int myTotalLinesCleared;
++EXT int enemyTotalLinesCleared;
++
+ #include "proto.h"
+ 
+ #endif /* NETRIS_H */
 --- netris-0.52.orig/util.c
 +++ netris-0.52/util.c
 @@ -74,7 +74,7 @@
@@ -485,7 +558,17 @@
 +ftp://ftp.netris.org/pub/netris/netris-([\d\.]+)\.tar\.gz  debian  uupdate
 --- netris-0.52.orig/debian/changelog
 +++ netris-0.52/debian/changelog
-@@ -0,0 +1,123 @@
+@@ -0,0 +1,133 @@
++netris (0.52-6) unstable; urgency=low
++
++  * #include <time.h> in curses.c (closes: #345305)
++  * Add patch to display line count, contributed by Piotr Krukowiecki
++    (closes: #304224)
++  * Bumped Standards-Version to 3.7.2, no changes needed.
++  * Updated FSF address in copyright file.
++
++ -- Gerfried Fuchs <alfie@debian.org>  Fri, 08 Sep 2006 14:08:42 -0500
++
 +netris (0.52-5) unstable; urgency=low
 +
 +  * Erm, add small fix for 64bit machines from #325926 which was meant to be
@@ -622,7 +705,7 @@
 +Priority: optional
 +Maintainer: Gerfried Fuchs <alfie@debian.org>
 +Build-Depends: libncurses5-dev
-+Standards-Version: 3.6.2
++Standards-Version: 3.7.2
 +
 +Package: netris
 +Architecture: any
@@ -760,8 +843,8 @@
 +    
 +    You should have received a copy of the GNU General Public License
 +    along with this program; if not, write to the Free Software
-+    Foundation, 59 Temple Place - Suite 330,
-+    Boston, MA 02111-1307, USA.
++    Foundation, 51 Franklin Street, Fifth Floor,
++    Boston, MA 02110-1301 USA.
 +
 +On Debian GNU/Linux systems, the complete text of the GNU General
 +Public License can be found in `/usr/share/common-licenses/GPL'.
