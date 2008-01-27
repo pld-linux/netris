@@ -2,7 +2,7 @@ Summary:	A free networked version of T*tris
 Summary(pl.UTF-8):	Darmowa, sieciowa wersja T*trisa
 Name:		netris
 Version:	0.52
-Release:	5
+Release:	6
 License:	GPL
 Group:		Applications/Games
 Source0:	ftp://ftp.netris.org/pub/netris/%{name}-%{version}.tar.gz
@@ -31,9 +31,10 @@ Darmowa, sieciowa wersja T*trisa.
 
 %install
 rm -rf $RPM_BUILD_ROOT
-install -d $RPM_BUILD_ROOT%{_bindir}
+install -d $RPM_BUILD_ROOT{%{_bindir},%{_mandir}/man6}
 
 install {netris,sr} $RPM_BUILD_ROOT%{_bindir}
+install debian/*.6 $RPM_BUILD_ROOT%{_mandir}/man6
 
 %clean
 rm -rf $RPM_BUILD_ROOT
@@ -42,3 +43,4 @@ rm -rf $RPM_BUILD_ROOT
 %defattr(644,root,root,755)
 %doc README FAQ *_desc
 %attr(755,root,root) %{_bindir}/*
+%{_mandir}/man6/*
