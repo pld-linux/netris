@@ -27,6 +27,7 @@ Darmowa, sieciowa wersja T*trisa.
 %build
 ./Configure \
 	--copt "%{rpmcflags}"
+%{__make} proto.h
 %{__make}
 
 %install
