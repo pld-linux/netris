@@ -1,0 +1,15 @@
+--- netris-0.52/Configure.orig	2020-08-30 19:57:09.019142324 +0200
++++ netris-0.52/Configure	2020-08-30 20:18:09.572313322 +0200
+@@ -81,11 +81,7 @@
+ for lib in -lcurses -lncurses; do
+ 	if $CC $CFLAGS $LEXTRA test.c $lib > /dev/null 2>&1; then
+ 		LFLAGS="$lib"
+-	fi
+-done
+-for lib in -lsocket -lnsl -ltermcap; do 
+-	if $CC $CFLAGS $LEXTRA test.c $lib > /dev/null 2>&1; then
+-		LFLAGS="$LFLAGS $lib"
++		break
+ 	fi
+ done
+ 
